@@ -59,3 +59,18 @@ def hash_password(plain_password: str) -> str:
 
 def verify_password(plain_password: str, password_hash: str) -> bool:
     return bcrypt.checkpw(plain_password.encode("utf-8"), password_hash.encode("utf-8"))
+
+sessions: Dict[str, str] = {}   # token -> user_id
+
+def get_current_user(authorization: Optional[str] = Header(default=None)):
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="missing or invalid authorization header")
+    token = authorization.split(" ", 1)[1]
+    user_id = sessions.get(token)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="invalid or expired token")
+    with get_db() as db:
+        row = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=401, detail="user not found")
+        return dict(row)
