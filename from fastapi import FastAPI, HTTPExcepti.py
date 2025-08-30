@@ -47,4 +47,8 @@ class UserPublic(BaseModel):
 
 class SignupResponse(BaseModel):
     user: UserPublic
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserPublic
 
