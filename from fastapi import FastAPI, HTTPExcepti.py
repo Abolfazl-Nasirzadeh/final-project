@@ -25,3 +25,26 @@ with get_db() as db:
     )
     """)
     db.commit()
+# ------------------ مدل‌های Pydantic ------------------
+class UserCreate(BaseModel):
+    first_name: str
+    last_name: str
+    username: constr(min_length=3, max_length=50, strip_whitespace=True)
+    email: EmailStr
+    password: constr(min_length=8)
+    role: Optional[str] = "user"
+
+class UserLogin(BaseModel):
+    username_or_email: str
+    password: str
+class UserPublic(BaseModel):
+    id: str
+    first_name: str
+    last_name: str
+    username: str
+    email: EmailStr
+    role: str
+
+class SignupResponse(BaseModel):
+    user: UserPublic
+
