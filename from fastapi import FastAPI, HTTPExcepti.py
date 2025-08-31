@@ -74,10 +74,10 @@ def get_current_user(authorization: Optional[str] = Header(default=None)):
         if not row:
             raise HTTPException(status_code=401, detail="user not found")
         return dict(row)
-    @app.post("/signup", response_model=SignupResponse, status_code=status.HTTP_201_CREATED)
+
+@app.post("/signup", response_model=SignupResponse, status_code=status.HTTP_201_CREATED)
 def signup(payload: UserCreate):
     with get_db() as db:
-        # بررسی تکراری بودن username و email
         if db.execute("SELECT 1 FROM users WHERE username = ?", (payload.username,)).fetchone():
             raise HTTPException(status_code=400, detail="username already exists")
         if db.execute("SELECT 1 FROM users WHERE email = ?", (payload.email,)).fetchone():
@@ -101,6 +101,7 @@ def signup(payload: UserCreate):
             email=payload.email,
             role=payload.role
         )}
+
 
 @app.post("/login", response_model=LoginResponse)
 def login(payload: UserLogin):
