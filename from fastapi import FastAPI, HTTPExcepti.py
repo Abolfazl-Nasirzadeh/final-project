@@ -74,3 +74,62 @@ def get_current_user(authorization: Optional[str] = Header(default=None)):
         if not row:
             raise HTTPException(status_code=401, detail="user not found")
         return dict(row)
+    @app.post("/signup", response_model=SignupResponse, status_code=status.HTTP_201_CREATED)
+def signup(payload: UserCreate):
+    with get_db() as db:
+        # بررسی تکراری بودن username و email
+        if db.execute("SELECT 1 FROM users WHERE username = ?", (payload.username,)).fetchone():
+            raise HTTPException(status_code=400, detail="username already exists")
+        if db.execute("SELECT 1 FROM users WHERE email = ?", (payload.email,)).fetchone():
+            raise HTTPException(status_code=400, detail="email already exists")
+
+        user_id = str(uuid4())
+        pwd_hash = hash_password(payload.password)
+
+        db.execute("""
+        INSERT INTO users (id, first_name, last_name, username, email, password_hash, role)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, payload.first_name, payload.last_name, payload.username,
+              payload.email, pwd_hash, payload.role))
+        db.commit()
+
+        return {"user": UserPublic(
+            id=user_id,
+            first_name=payload.first_name,
+            last_name=payload.last_name,
+            username=payload.username,
+            email=payload.email,
+            role=payload.role
+        )}
+
+@app.post("/login", response_model=LoginResponse)
+def login(payload: UserLogin):
+    with get_db() as db:
+        row = db.execute(
+            "SELECT * FROM users WHERE username = ? OR email = ?",
+            (payload.username_or_email, payload.username_or_email)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=401, detail="invalid credentials")
+
+        user = dict(row)
+        if not verify_password(payload.password, user["password_hash"]):
+            raise HTTPException(status_code=401, detail="invalid credentials")
+
+        # توکن ساده (نه JWT)
+        token = secrets.token_urlsafe(32)
+        sessions[token] = user["id"]
+
+        return {"access_token": token, "token_type": "bearer",
+                "user": UserPublic(
+                    id=user["id"],
+                    first_name=user["first_name"],
+                    last_name=user["last_name"],
+                    username=user["username"],
+                    email=user["email"],
+                    role=user["role"]
+                )}
+
+@app.get("/me", response_model=UserPublic)
+def me(current=Depends(get_current_user)):
+    return UserPublic(**current)
