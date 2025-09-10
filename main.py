@@ -85,6 +85,26 @@ class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserPublic
+    
+    class SupplierBase(BaseModel):
+    name: str
+    email: EmailStr
+    phone: Optional[str] = None
+    delivery_time: Optional[int] = None
+    is_active: bool = True
+
+    class SupplierCreate(SupplierBase):
+        pass
+
+    class SupplierUpdate(BaseModel):
+        name: Optional[str]
+        email: Optional[EmailStr]
+        phone: Optional[str]
+        delivery_time: Optional[int]
+        is_active: Optional[bool]
+
+    class SupplierOut(SupplierBase):
+        id: int
 
 def hash_password(plain_password: str) -> str:
     salt = bcrypt.gensalt()
@@ -170,3 +190,4 @@ def login(payload: UserLogin):
 @app.get("/me", response_model=UserPublic)
 def me(current=Depends(get_current_user)):
     return UserPublic(**current)
+
