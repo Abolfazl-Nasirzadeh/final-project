@@ -37,7 +37,27 @@ with get_db() as db:
     )
     """)
 
-   
+
+    db.execute("""
+    CREATE TABLE IF NOT EXISTS purchase_orders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        supplier_id INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (supplier_id) REFERENCES suppliers (id)
+    )
+    """)
+
+
+    db.execute("""
+    CREATE TABLE IF NOT EXISTS order_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id INTEGER NOT NULL,
+        product_id INTEGER NOT NULL,
+        quantity INTEGER NOT NULL,
+        FOREIGN KEY (order_id) REFERENCES purchase_orders (id)
+    )
+    """)
     db.commit()
 # ------------------ مدل‌های Pydantic ------------------
 class UserCreate(BaseModel):
