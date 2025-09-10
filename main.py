@@ -24,6 +24,20 @@ with get_db() as db:
         role TEXT NOT NULL
     )
     """)
+    
+    
+    db.execute("""
+    CREATE TABLE IF NOT EXISTS suppliers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        phone TEXT,
+        delivery_time INTEGER,
+        is_active BOOLEAN DEFAULT 1
+    )
+    """)
+
+   
     db.commit()
 # ------------------ مدل‌های Pydantic ------------------
 class UserCreate(BaseModel):
@@ -91,6 +105,8 @@ def signup(payload: UserCreate):
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (user_id, payload.first_name, payload.last_name, payload.username,
               payload.email, pwd_hash, payload.role))
+        
+        
         db.commit()
 
         return {"user": UserPublic(
