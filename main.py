@@ -263,3 +263,65 @@ def delete_supplier(supplier_id: int):
         db.execute("DELETE FROM suppliers WHERE id = ?", (supplier_id,))
         db.commit()
         return {"detail": "Supplier deleted successfully"}
+    
+@app.post("/purchase-orders", response_model=PurchaseOrderOut, status_code=201)
+def create_order(payload: PurchaseOrderCreate):
+    with get_db() as db:
+        
+        supplier = db.execute("SELECT * FROM suppliers WHERE id = ?", (payload.supplier_id,)).fetchone()
+        if not supplier:
+            raise HTTPException(status_code=404, detail="supplier not found")
+
+        
+        cur = db.execute("INSERT INTO purchase_orders (supplier_id, status) VALUES (?, 'draft')",
+                         (payload.supplier_id,))
+        order_id = cur.lastrowid
+
+        
+        items_out = []
+        for item in payload.items:
+            cur_item = db.execute("INSERT INTO order_items (order_id, product_id, quantity) VALUES (?, ?, ?)",
+                                  (order_id, item.product_id, item.quantity))
+            items_out.append({"id": cur_item.lastrowid, "product_id": item.product_id, "quantity": item.quantity})
+
+        db.commit()
+
+        return {
+            "id": order_id,
+            "supplier_id": payload.supplier_id,
+            "status": "draft",
+            "created_at": "NOW",  
+            "items": items_out
+        }
+
+@app.get("/purchase-orders", response_model=List[PurchaseOrderOut])
+def get_orders():
+    with get_db() as db:
+        orders = db.execute("SELECT * FROM purchase_orders").fetchall()
+        result = []
+        for order in orders:
+            items = db.execute("SELECT * FROM order_items WHERE order_id = ?", (order["id"],)).fetchall()
+            result.append({
+                "id": order["id"],
+                "supplier_id": order["supplier_id"],
+                "status": order["status"],
+                "created_at": order["created_at"],
+                "items": [dict(i) for i in items]
+            })
+        return result
+
+@app.get("/purchase-orders/{order_id}", response_model=PurchaseOrderOut)
+def get_order(order_id: int):
+    with get_db() as db:
+        order = db.execute("SELECT * FROM purchase_orders WHERE id = ?", (order_id,)).fetchone()
+        if not order:
+            raise HTTPException(status_code=404, detail="order not found")
+
+        items = db.execute("SELECT * FROM order_items WHERE order_id = ?", (order_id,)).fetchall()
+        return {
+            "id": order["id"],
+            "supplier_id": order["supplier_id"],
+            "status": order["status"],
+            "created_at": order["created_at"],
+            "items": [dict(i) for i in items]
+        }
