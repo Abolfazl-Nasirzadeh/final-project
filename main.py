@@ -105,6 +105,24 @@ class LoginResponse(BaseModel):
 
     class SupplierOut(SupplierBase):
         id: int
+        
+    class OrderItemIn(BaseModel):
+        product_id: int
+        quantity: int
+
+    class PurchaseOrderCreate(BaseModel):
+        supplier_id: int
+        items: List[OrderItemIn]
+
+    class OrderItemOut(OrderItemIn):
+        id: int
+
+    class PurchaseOrderOut(BaseModel):
+        id: int
+        supplier_id: int
+        status: str
+        created_at: str
+        items: List[OrderItemOut]
 
 def hash_password(plain_password: str) -> str:
     salt = bcrypt.gensalt()
