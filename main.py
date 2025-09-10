@@ -191,3 +191,57 @@ def login(payload: UserLogin):
 def me(current=Depends(get_current_user)):
     return UserPublic(**current)
 
+@app.post("/suppliers", response_model=SupplierOut, status_code=201)
+def create_supplier(payload: SupplierCreate):
+    with get_db() as db:
+        row = db.execute("SELECT 1 FROM suppliers WHERE email = ?", (payload.email,)).fetchone()
+        if row:
+            raise HTTPException(status_code=400, detail="supplier with this email exists")
+
+        cur = db.execute("""
+            INSERT INTO suppliers (name, email, phone, delivery_time, is_active)
+            VALUES (?, ?, ?, ?, ?)
+        """, (payload.name, payload.email, payload.phone, payload.delivery_time, payload.is_active))
+        db.commit()
+        supplier_id = cur.lastrowid
+        return {**payload.dict(), "id": supplier_id}
+
+@app.get("/suppliers", response_model=list[SupplierOut])
+def get_suppliers():
+    with get_db() as db:
+        rows = db.execute("SELECT * FROM suppliers").fetchall()
+        return [dict(row) for row in rows]
+
+@app.get("/suppliers/{supplier_id}", response_model=SupplierOut)
+def get_supplier(supplier_id: int):
+    with get_db() as db:
+        row = db.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="supplier not found")
+        return dict(row)
+
+@app.put("/suppliers/{supplier_id}", response_model=SupplierOut)
+def update_supplier(supplier_id: int, payload: SupplierUpdate):
+    with get_db() as db:
+        row = db.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="supplier not found")
+
+        updates = payload.dict(exclude_unset=True)
+        for key, value in updates.items():
+            db.execute(f"UPDATE suppliers SET {key} = ? WHERE id = ?", (value, supplier_id))
+        db.commit()
+
+        row = db.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+        return dict(row)
+
+@app.delete("/suppliers/{supplier_id}")
+def delete_supplier(supplier_id: int):
+    with get_db() as db:
+        row = db.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="supplier not found")
+
+        db.execute("DELETE FROM suppliers WHERE id = ?", (supplier_id,))
+        db.commit()
+        return {"detail": "Supplier deleted successfully"}
