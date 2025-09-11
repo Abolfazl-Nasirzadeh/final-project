@@ -6,14 +6,14 @@ from uuid import uuid4
 
 app = FastAPI(title="Inventory Management Project")
 
-# ------------------ دیتابیس SQLite ------------------
+
 def get_db():
     conn = sqlite3.connect("users.db")
     conn.row_factory = sqlite3.Row
     return conn
 
 with get_db() as db:
-    # جدول کاربران (بخش نفر A)
+    
     db.execute("""
     CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
@@ -26,7 +26,7 @@ with get_db() as db:
     )
     """)
 
-    # جدول تأمین‌کنندگان (بخش نفر C)
+    
     db.execute("""
     CREATE TABLE IF NOT EXISTS suppliers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,7 +38,7 @@ with get_db() as db:
     )
     """)
 
-    # جدول محصولات (بخش نفر B)
+    
     db.execute("""
     CREATE TABLE IF NOT EXISTS products (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,7 +49,7 @@ with get_db() as db:
     )
     """)
 
-    # جدول سفارش‌های خرید (بخش نفر C)
+    
     db.execute("""
     CREATE TABLE IF NOT EXISTS purchase_orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,7 +60,7 @@ with get_db() as db:
     )
     """)
 
-    # جدول آیتم‌های سفارش خرید (بخش نفر C)
+    
     db.execute("""
     CREATE TABLE IF NOT EXISTS order_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,8 +73,7 @@ with get_db() as db:
     """)
     db.commit()
 
-# ------------------ مدل‌های Pydantic ------------------
-# ---- بخش Auth (نفر A) ----
+
 class UserCreate(BaseModel):
     first_name: str
     last_name: str
@@ -103,7 +102,7 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     user: UserPublic
 
-# ---- بخش Supplier (نفر C) ----
+
 class SupplierBase(BaseModel):
     name: str
     email: EmailStr
@@ -124,7 +123,6 @@ class SupplierUpdate(BaseModel):
 class SupplierOut(SupplierBase):
     id: int
 
-# ---- بخش PurchaseOrder (نفر C) ----
 class OrderItemIn(BaseModel):
     product_id: int
     quantity: int
@@ -144,9 +142,9 @@ class PurchaseOrderOut(BaseModel):
     items: List[OrderItemOut]
 
 class OrderStatusUpdate(BaseModel):
-    new_status: str  # draft -> sent -> received -> closed
+    new_status: str  
 
-# ------------------ توابع امنیتی ------------------
+
 def hash_password(plain_password: str) -> str:
     salt = bcrypt.gensalt()
     hashed = bcrypt.hashpw(plain_password.encode("utf-8"), salt)
@@ -171,7 +169,7 @@ def get_current_user(authorization: Optional[str] = Header(default=None)):
             raise HTTPException(status_code=401, detail="user not found")
         return dict(row)
 
-# ------------------ مسیرهای Auth (بخش نفر A) ------------------
+
 @app.post("/signup", response_model=SignupResponse, status_code=status.HTTP_201_CREATED)
 def signup(payload: UserCreate):
     with get_db() as db:
@@ -230,7 +228,28 @@ def login(payload: UserLogin):
 def me(current=Depends(get_current_user)):
     return UserPublic(**current)
 
-# ------------------ مسیرهای Supplier (بخش نفر C) ------------------
+@app.put("/suppliers/{supplier_id}/activate")
+def activate_supplier(supplier_id: int):
+    with get_db() as db:
+        row = db.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="supplier not found")
+        db.execute("UPDATE suppliers SET is_active = 1 WHERE id = ?", (supplier_id,))
+        db.commit()
+        return {"detail": f"Supplier {supplier_id} activated"}
+
+
+@app.put("/suppliers/{supplier_id}/deactivate")
+def deactivate_supplier(supplier_id: int):
+    with get_db() as db:
+        row = db.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="supplier not found")
+        db.execute("UPDATE suppliers SET is_active = 0 WHERE id = ?", (supplier_id,))
+        db.commit()
+        return {"detail": f"Supplier {supplier_id} deactivated"}
+
+
 @app.post("/suppliers", response_model=SupplierOut, status_code=201)
 def create_supplier(payload: SupplierCreate):
     with get_db() as db:
@@ -252,7 +271,7 @@ def get_suppliers():
         rows = db.execute("SELECT * FROM suppliers").fetchall()
         return [dict(row) for row in rows]
 
-# ------------------ مسیرهای PurchaseOrder (بخش نفر C) ------------------
+
 @app.post("/purchase-orders", response_model=PurchaseOrderOut, status_code=201)
 def create_order(payload: PurchaseOrderCreate):
     with get_db() as db:
