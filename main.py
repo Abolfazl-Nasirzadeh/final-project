@@ -37,6 +37,15 @@ with get_db() as db:
     )
     """)
 
+    db.execute("""
+    CREATE TABLE IF NOT EXISTS products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        sku TEXT UNIQUE NOT NULL,
+        price REAL NOT NULL,
+        quantity INTEGER NOT NULL DEFAULT 0
+    )
+    """)
 
     db.execute("""
     CREATE TABLE IF NOT EXISTS purchase_orders (
