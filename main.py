@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends, Header, status
-from pydantic import BaseModel, EmailStr, constr
+from pydantic import BaseModel, EmailStr, constr, Field
 import bcrypt, secrets, sqlite3
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Annotated
 from uuid import uuid4
 
 app = FastAPI(title="Inventory Management Project")
@@ -66,9 +66,9 @@ with get_db() as db:
 class UserCreate(BaseModel):
     first_name: str
     last_name: str
-    username: constr(min_length=3, max_length=50, strip_whitespace=True)
+    username: Annotated[str, Field (min_length=3, max_length=50, strip_whitespace=True) ]
     email: EmailStr
-    password: constr(min_length=8)
+    password: Annotated[str, Field (min_length=8) ]
     role: Optional[str] = "user"
 
 class UserLogin(BaseModel):
