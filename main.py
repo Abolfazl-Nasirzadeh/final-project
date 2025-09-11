@@ -1,9 +1,10 @@
 from fastapi import FastAPI, HTTPException, Depends, Header, status
 from pydantic import BaseModel, EmailStr, constr
 import bcrypt, secrets, sqlite3
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from uuid import uuid4
-app = FastAPI(title="Signup / Login with SQLite")
+
+app = FastAPI(title="Inventory Management Project")
 
 # ------------------ دیتابیس SQLite ------------------
 def get_db():
@@ -11,8 +12,8 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
-
 with get_db() as db:
+    # جدول کاربران (بخش نفر A)
     db.execute("""
     CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
@@ -24,8 +25,8 @@ with get_db() as db:
         role TEXT NOT NULL
     )
     """)
-    
-    
+
+    # جدول تأمین‌کنندگان (بخش نفر C)
     db.execute("""
     CREATE TABLE IF NOT EXISTS suppliers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,6 +38,7 @@ with get_db() as db:
     )
     """)
 
+    # جدول محصولات (بخش نفر B)
     db.execute("""
     CREATE TABLE IF NOT EXISTS products (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,6 +49,7 @@ with get_db() as db:
     )
     """)
 
+    # جدول سفارش‌های خرید (بخش نفر C)
     db.execute("""
     CREATE TABLE IF NOT EXISTS purchase_orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,18 +60,21 @@ with get_db() as db:
     )
     """)
 
-
+    # جدول آیتم‌های سفارش خرید (بخش نفر C)
     db.execute("""
     CREATE TABLE IF NOT EXISTS order_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         order_id INTEGER NOT NULL,
         product_id INTEGER NOT NULL,
         quantity INTEGER NOT NULL,
-        FOREIGN KEY (order_id) REFERENCES purchase_orders (id)
+        FOREIGN KEY (order_id) REFERENCES purchase_orders (id),
+        FOREIGN KEY (product_id) REFERENCES products (id)
     )
     """)
     db.commit()
+
 # ------------------ مدل‌های Pydantic ------------------
+# ---- بخش Auth (نفر A) ----
 class UserCreate(BaseModel):
     first_name: str
     last_name: str
@@ -80,6 +86,7 @@ class UserCreate(BaseModel):
 class UserLogin(BaseModel):
     username_or_email: str
     password: str
+
 class UserPublic(BaseModel):
     id: str
     first_name: str
@@ -90,49 +97,56 @@ class UserPublic(BaseModel):
 
 class SignupResponse(BaseModel):
     user: UserPublic
+
 class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserPublic
-    
-    class SupplierBase(BaseModel):
+
+# ---- بخش Supplier (نفر C) ----
+class SupplierBase(BaseModel):
     name: str
     email: EmailStr
     phone: Optional[str] = None
     delivery_time: Optional[int] = None
     is_active: bool = True
 
-    class SupplierCreate(SupplierBase):
-        pass
+class SupplierCreate(SupplierBase):
+    pass
 
-    class SupplierUpdate(BaseModel):
-        name: Optional[str]
-        email: Optional[EmailStr]
-        phone: Optional[str]
-        delivery_time: Optional[int]
-        is_active: Optional[bool]
+class SupplierUpdate(BaseModel):
+    name: Optional[str]
+    email: Optional[EmailStr]
+    phone: Optional[str]
+    delivery_time: Optional[int]
+    is_active: Optional[bool]
 
-    class SupplierOut(SupplierBase):
-        id: int
-        
-    class OrderItemIn(BaseModel):
-        product_id: int
-        quantity: int
+class SupplierOut(SupplierBase):
+    id: int
 
-    class PurchaseOrderCreate(BaseModel):
-        supplier_id: int
-        items: List[OrderItemIn]
+# ---- بخش PurchaseOrder (نفر C) ----
+class OrderItemIn(BaseModel):
+    product_id: int
+    quantity: int
 
-    class OrderItemOut(OrderItemIn):
-        id: int
+class PurchaseOrderCreate(BaseModel):
+    supplier_id: int
+    items: List[OrderItemIn]
 
-    class PurchaseOrderOut(BaseModel):
-        id: int
-        supplier_id: int
-        status: str
-        created_at: str
-        items: List[OrderItemOut]
+class OrderItemOut(OrderItemIn):
+    id: int
 
+class PurchaseOrderOut(BaseModel):
+    id: int
+    supplier_id: int
+    status: str
+    created_at: str
+    items: List[OrderItemOut]
+
+class OrderStatusUpdate(BaseModel):
+    new_status: str  # draft -> sent -> received -> closed
+
+# ------------------ توابع امنیتی ------------------
 def hash_password(plain_password: str) -> str:
     salt = bcrypt.gensalt()
     hashed = bcrypt.hashpw(plain_password.encode("utf-8"), salt)
@@ -141,7 +155,8 @@ def hash_password(plain_password: str) -> str:
 def verify_password(plain_password: str, password_hash: str) -> bool:
     return bcrypt.checkpw(plain_password.encode("utf-8"), password_hash.encode("utf-8"))
 
-sessions: Dict[str, str] = {}   # token -> user_id
+# ذخیره‌ی توکن‌ها
+sessions: Dict[str, str] = {}
 
 def get_current_user(authorization: Optional[str] = Header(default=None)):
     if not authorization or not authorization.lower().startswith("bearer "):
@@ -156,6 +171,7 @@ def get_current_user(authorization: Optional[str] = Header(default=None)):
             raise HTTPException(status_code=401, detail="user not found")
         return dict(row)
 
+# ------------------ مسیرهای Auth (بخش نفر A) ------------------
 @app.post("/signup", response_model=SignupResponse, status_code=status.HTTP_201_CREATED)
 def signup(payload: UserCreate):
     with get_db() as db:
@@ -172,8 +188,6 @@ def signup(payload: UserCreate):
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (user_id, payload.first_name, payload.last_name, payload.username,
               payload.email, pwd_hash, payload.role))
-        
-        
         db.commit()
 
         return {"user": UserPublic(
@@ -184,7 +198,6 @@ def signup(payload: UserCreate):
             email=payload.email,
             role=payload.role
         )}
-
 
 @app.post("/login", response_model=LoginResponse)
 def login(payload: UserLogin):
@@ -200,7 +213,6 @@ def login(payload: UserLogin):
         if not verify_password(payload.password, user["password_hash"]):
             raise HTTPException(status_code=401, detail="invalid credentials")
 
-        # توکن ساده (نه JWT)
         token = secrets.token_urlsafe(32)
         sessions[token] = user["id"]
 
@@ -218,6 +230,7 @@ def login(payload: UserLogin):
 def me(current=Depends(get_current_user)):
     return UserPublic(**current)
 
+# ------------------ مسیرهای Supplier (بخش نفر C) ------------------
 @app.post("/suppliers", response_model=SupplierOut, status_code=201)
 def create_supplier(payload: SupplierCreate):
     with get_db() as db:
@@ -233,62 +246,30 @@ def create_supplier(payload: SupplierCreate):
         supplier_id = cur.lastrowid
         return {**payload.dict(), "id": supplier_id}
 
-@app.get("/suppliers", response_model=list[SupplierOut])
+@app.get("/suppliers", response_model=List[SupplierOut])
 def get_suppliers():
     with get_db() as db:
         rows = db.execute("SELECT * FROM suppliers").fetchall()
         return [dict(row) for row in rows]
 
-@app.get("/suppliers/{supplier_id}", response_model=SupplierOut)
-def get_supplier(supplier_id: int):
-    with get_db() as db:
-        row = db.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="supplier not found")
-        return dict(row)
-
-@app.put("/suppliers/{supplier_id}", response_model=SupplierOut)
-def update_supplier(supplier_id: int, payload: SupplierUpdate):
-    with get_db() as db:
-        row = db.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="supplier not found")
-
-        updates = payload.dict(exclude_unset=True)
-        for key, value in updates.items():
-            db.execute(f"UPDATE suppliers SET {key} = ? WHERE id = ?", (value, supplier_id))
-        db.commit()
-
-        row = db.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
-        return dict(row)
-
-@app.delete("/suppliers/{supplier_id}")
-def delete_supplier(supplier_id: int):
-    with get_db() as db:
-        row = db.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="supplier not found")
-
-        db.execute("DELETE FROM suppliers WHERE id = ?", (supplier_id,))
-        db.commit()
-        return {"detail": "Supplier deleted successfully"}
-    
+# ------------------ مسیرهای PurchaseOrder (بخش نفر C) ------------------
 @app.post("/purchase-orders", response_model=PurchaseOrderOut, status_code=201)
 def create_order(payload: PurchaseOrderCreate):
     with get_db() as db:
-        
         supplier = db.execute("SELECT * FROM suppliers WHERE id = ?", (payload.supplier_id,)).fetchone()
         if not supplier:
             raise HTTPException(status_code=404, detail="supplier not found")
 
-        
         cur = db.execute("INSERT INTO purchase_orders (supplier_id, status) VALUES (?, 'draft')",
                          (payload.supplier_id,))
         order_id = cur.lastrowid
 
-        
         items_out = []
         for item in payload.items:
+            product = db.execute("SELECT * FROM products WHERE id = ?", (item.product_id,)).fetchone()
+            if not product:
+                raise HTTPException(status_code=404, detail=f"product {item.product_id} not found")
+
             cur_item = db.execute("INSERT INTO order_items (order_id, product_id, quantity) VALUES (?, ?, ?)",
                                   (order_id, item.product_id, item.quantity))
             items_out.append({"id": cur_item.lastrowid, "product_id": item.product_id, "quantity": item.quantity})
@@ -299,38 +280,35 @@ def create_order(payload: PurchaseOrderCreate):
             "id": order_id,
             "supplier_id": payload.supplier_id,
             "status": "draft",
-            "created_at": "NOW",  
+            "created_at": "NOW",
             "items": items_out
         }
 
-@app.get("/purchase-orders", response_model=List[PurchaseOrderOut])
-def get_orders():
-    with get_db() as db:
-        orders = db.execute("SELECT * FROM purchase_orders").fetchall()
-        result = []
-        for order in orders:
-            items = db.execute("SELECT * FROM order_items WHERE order_id = ?", (order["id"],)).fetchall()
-            result.append({
-                "id": order["id"],
-                "supplier_id": order["supplier_id"],
-                "status": order["status"],
-                "created_at": order["created_at"],
-                "items": [dict(i) for i in items]
-            })
-        return result
+@app.put("/purchase-orders/{order_id}/status")
+def update_order_status(order_id: int, payload: OrderStatusUpdate):
+    valid_statuses = ["draft", "sent", "received", "closed"]
 
-@app.get("/purchase-orders/{order_id}", response_model=PurchaseOrderOut)
-def get_order(order_id: int):
+    if payload.new_status not in valid_statuses:
+        raise HTTPException(status_code=400, detail="invalid status")
+
     with get_db() as db:
         order = db.execute("SELECT * FROM purchase_orders WHERE id = ?", (order_id,)).fetchone()
         if not order:
             raise HTTPException(status_code=404, detail="order not found")
 
-        items = db.execute("SELECT * FROM order_items WHERE order_id = ?", (order_id,)).fetchall()
-        return {
-            "id": order["id"],
-            "supplier_id": order["supplier_id"],
-            "status": order["status"],
-            "created_at": order["created_at"],
-            "items": [dict(i) for i in items]
-        }
+        current_status = order["status"]
+        order_flow = ["draft", "sent", "received", "closed"]
+
+        if order_flow.index(payload.new_status) <= order_flow.index(current_status):
+            raise HTTPException(status_code=400, detail="cannot go back in status flow")
+
+        db.execute("UPDATE purchase_orders SET status = ? WHERE id = ?", (payload.new_status, order_id))
+
+        if payload.new_status == "received":
+            items = db.execute("SELECT * FROM order_items WHERE order_id = ?", (order_id,)).fetchall()
+            for item in items:
+                db.execute("UPDATE products SET quantity = quantity + ? WHERE id = ?",
+                           (item["quantity"], item["product_id"]))
+
+        db.commit()
+        return {"detail": f"order status updated to {payload.new_status}"}
