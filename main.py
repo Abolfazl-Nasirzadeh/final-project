@@ -361,8 +361,8 @@ def get_products(
     min_price: Optional[float] = Query(None),
     max_price: Optional[float] = Query(None),
     below_threshold: Optional[bool] = Query(False, description="only products below min_threshold"),
-    sort_by: Optional[str] = Query("name", regex="^(name|price)$"),
-    order: Optional[str] = Query("asc", regex="^(asc|desc)$"),
+    sort_by: Optional[str] = Query("name", pattern="^(name|price)$"),
+    order: Optional[str] = Query("asc", pattern="^(asc|desc)$"),
     limit: int = Query(10, ge=1, le=500),
     page: int = Query(1, ge=1)
 ):
