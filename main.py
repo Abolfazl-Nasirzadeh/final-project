@@ -328,39 +328,134 @@ def deactivate_supplier(supplier_id: int):
 
 
 @app.post("/products", response_model=ProductOut, status_code=201)
-def create_product(payload: ProductCreate):
+def create_product(payload: ProductCreate, current=Depends(get_current_user)):
     with get_db() as db:
-        if db.execute("SELECT 1 FROM products WHERE sku = ?", (payload.sku,)).fetchone():
-            raise HTTPException(status_code=400, detail="product with this SKU exists")
+        sku = payload.sku.strip() if payload.sku else None
+        if not sku:
+            sku = generate_sku(payload.name)
+        else:
+            if db.execute("SELECT 1 FROM products WHERE sku = ?", (sku,)).fetchone():
+                raise HTTPException(status_code=400, detail="product with this SKU exists")
         cur = db.execute("""
-            INSERT INTO products (name, sku, price, quantity)
-            VALUES (?, ?, ?, ?)
-        """, (payload.name, payload.sku, payload.price, payload.quantity))
+            INSERT INTO products (name, sku, price, quantity, min_threshold, category)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (payload.name, sku, payload.price, payload.quantity or 0, payload.min_threshold, payload.category or ""))
         db.commit()
         product_id = cur.lastrowid
-        return {**payload.dict(), "id": product_id}
+        low_stock = (payload.quantity or 0) < payload.min_threshold
+        return ProductOut(
+            id=product_id,
+            name=payload.name,
+            sku=sku,
+            price=payload.price,
+            quantity=payload.quantity or 0,
+            min_threshold=payload.min_threshold,
+            category=payload.category or "",
+            low_stock=low_stock
+        )
 
 @app.get("/products", response_model=List[ProductOut])
-def get_products():
+def get_products(
+    q: Optional[str] = Query(None, description="search name or sku"),
+    category: Optional[str] = Query(None),
+    min_price: Optional[float] = Query(None),
+    max_price: Optional[float] = Query(None),
+    below_threshold: Optional[bool] = Query(False, description="only products below min_threshold"),
+    sort_by: Optional[str] = Query("name", regex="^(name|price)$"),
+    order: Optional[str] = Query("asc", regex="^(asc|desc)$"),
+    limit: int = Query(10, ge=1, le=500),
+    page: int = Query(1, ge=1)
+):
+    offset = (page - 1) * limit
+    where_clauses = []
+    params = []
+
+    if q:
+        where_clauses.append("(name LIKE ? OR sku LIKE ?)")
+        q_like = f"%{q}%"
+        params.extend([q_like, q_like])
+    if category:
+        where_clauses.append("category = ?")
+        params.append(category)
+    if min_price is not None:
+        where_clauses.append("price >= ?")
+        params.append(min_price)
+    if max_price is not None:
+        where_clauses.append("price <= ?")
+        params.append(max_price)
+    if below_threshold:
+        where_clauses.append("quantity < min_threshold")
+
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    order_sql = f"ORDER BY {sort_by} {order.upper()}"
+    sql = f"SELECT * FROM products {where_sql} {order_sql} LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+
     with get_db() as db:
-        rows = db.execute("SELECT * FROM products").fetchall()
-        return [dict(row) for row in rows]
+        rows = db.execute(sql, tuple(params)).fetchall()
+        result = []
+        for r in rows:
+            low_stock = r["quantity"] < r["min_threshold"]
+            result.append(ProductOut(
+                id=r["id"],
+                name=r["name"],
+                sku=r["sku"],
+                price=r["price"],
+                quantity=r["quantity"],
+                min_threshold=r["min_threshold"],
+                category=r["category"],
+                low_stock=low_stock
+            ))
+        return result
+
+@app.get("/products/{product_id}", response_model=ProductOut)
+def get_product(product_id: int):
+    with get_db() as db:
+        r = db.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
+        if not r:
+            raise HTTPException(status_code=404, detail="product not found")
+        low_stock = r["quantity"] < r["min_threshold"]
+        return ProductOut(
+            id=r["id"],
+            name=r["name"],
+            sku=r["sku"],
+            price=r["price"],
+            quantity=r["quantity"],
+            min_threshold=r["min_threshold"],
+            category=r["category"],
+            low_stock=low_stock
+        )
 
 @app.put("/products/{product_id}", response_model=ProductOut)
-def update_product(product_id: int, payload: ProductUpdate):
+def update_product(product_id: int, payload: ProductUpdate, current=Depends(get_current_user)):
     with get_db() as db:
         row = db.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="product not found")
         update_data = payload.dict(exclude_unset=True)
-        set_clause = ", ".join([f"{k} = ?" for k in update_data.keys()])
-        db.execute(f"UPDATE products SET {set_clause} WHERE id = ?", (*update_data.values(), product_id))
-        db.commit()
+        if "sku" in update_data and update_data["sku"]:
+            exists = db.execute("SELECT 1 FROM products WHERE sku = ? AND id != ?", (update_data["sku"], product_id)).fetchone()
+            if exists:
+                raise HTTPException(status_code=400, detail="another product with this SKU exists")
+        if update_data:
+            set_clause = ", ".join([f"{k} = ?" for k in update_data.keys()])
+            db.execute(f"UPDATE products SET {set_clause} WHERE id = ?", (*update_data.values(), product_id))
+            db.commit()
         updated = db.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
-        return dict(updated)
+        return ProductOut(
+            id=updated["id"],
+            name=updated["name"],
+            sku=updated["sku"],
+            price=updated["price"],
+            quantity=updated["quantity"],
+            min_threshold=updated["min_threshold"],
+            category=updated["category"],
+            low_stock=low_stock
+        )
 
 @app.delete("/products/{product_id}")
-def delete_product(product_id: int):
+def delete_product(product_id: int, current=Depends(require_admin)):
     with get_db() as db:
         row = db.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
         if not row:
