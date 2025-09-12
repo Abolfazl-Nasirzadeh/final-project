@@ -76,10 +76,9 @@ with get_db() as db:
         if "category" not in info:
             db.execute("ALTER TABLE products ADD COLUMN category TEXT DEFAULT ''")
         if "sku" not in info:
-            # unlikely since earlier created schema includes sku, but ensure column exists
             raise RuntimeError("products table missing 'sku' column after migration attempt")
         db.commit()
-        
+
 class UserCreate(BaseModel):
     first_name: str
     last_name: str
@@ -133,6 +132,8 @@ class ProductBase(BaseModel):
     sku: str
     price: float
     quantity: Optional[int] = 0
+    min_threshold: int = Field(..., ge=0)
+    category: Optional[str] = ""
 
 class ProductCreate(ProductBase):
     pass
@@ -142,9 +143,18 @@ class ProductUpdate(BaseModel):
     sku: Optional[str]
     price: Optional[float]
     quantity: Optional[int]
+    min_threshold: Optional[int]
+    category: Optional[str]
 
-class ProductOut(ProductBase):
+class ProductOut(BaseModel):
     id: int
+    name: str
+    sku: str
+    price: float
+    quantity: int
+    min_threshold: int
+    category: Optional[str]
+    low_stock: bool
 
 class OrderItemIn(BaseModel):
     product_id: int
