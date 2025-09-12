@@ -463,7 +463,18 @@ def delete_product(product_id: int, current=Depends(require_admin)):
         db.execute("DELETE FROM products WHERE id = ?", (product_id,))
         db.commit()
         return {"detail": f"Product {product_id} deleted"}
-    
+
+@app.post("/products/{product_id}/add-stock")
+def add_stock(product_id: int, amount: int = Body(..., embed=True, ge=1), current=Depends(require_admin)):
+    with get_db() as db:
+        row = db.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="product not found")
+        new_qty = row["quantity"] + amount
+        db.execute("UPDATE products SET quantity = ? WHERE id = ?", (new_qty, product_id))
+        db.commit()
+        low_stock = new_qty < row["min_threshold"]
+        return {"detail": f"Added {amount} units", "product_id": product_id, "new_quantity": new_qty, "low_stock": low_stock}
 
 @app.post("/purchase-orders", response_model=PurchaseOrderOut, status_code=201)
 def create_order(payload: PurchaseOrderCreate):
