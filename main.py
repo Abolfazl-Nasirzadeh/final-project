@@ -200,6 +200,23 @@ def get_current_user(authorization: Optional[str] = Header(default=None)):
             raise HTTPException(status_code=401, detail="user not found")
         return dict(row)
 
+def require_admin(current=Depends(get_current_user)):
+    if current.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="admin privileges required")
+    return current
+
+def generate_sku(name: str, tries: int = 6) -> str:
+    base = "".join(ch for ch in name.upper() if ch.isalnum())[:6]
+    if not base:
+        base = "ITEM"
+    with get_db() as db:
+        for _ in range(tries):
+            suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
+            sku = f"{base[:6]}-{suffix}"
+            if not db.execute("SELECT 1 FROM products WHERE sku = ?", (sku,)).fetchone():
+                return sku
+    raise HTTPException(status_code=500, detail="unable to generate unique SKU, try again")
+
 @app.post("/signup", response_model=SignupResponse, status_code=status.HTTP_201_CREATED)
 def signup(payload: UserCreate):
     with get_db() as db:
