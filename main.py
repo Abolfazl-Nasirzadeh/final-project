@@ -497,7 +497,8 @@ def create_order(payload: PurchaseOrderCreate):
                                   (order_id, item.product_id, item.quantity))
             items_out.append({"id": cur_item.lastrowid, "product_id": item.product_id, "quantity": item.quantity})
         db.commit()
-        return {"id": order_id, "supplier_id": payload.supplier_id, "status": "draft", "created_at": "NOW", "items": items_out}
+        created_at = db.execute("SELECT created_at FROM purchase_orders WHERE id = ?", (order_id,)).fetchone()["created_at"]
+        return {"id": order_id, "supplier_id": payload.supplier_id, "status": "draft", "created_at": created_at, "items": items_out}
 
 @app.put("/purchase-orders/{order_id}/status")
 def update_order_status(order_id: int, payload: OrderStatusUpdate):
