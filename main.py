@@ -69,6 +69,17 @@ with get_db() as db:
     """)
     db.commit()
 
+with get_db() as db:
+        info = {row["name"] for row in db.execute("PRAGMA table_info(products)").fetchall()}
+        if "min_threshold" not in info:
+            db.execute("ALTER TABLE products ADD COLUMN min_threshold INTEGER NOT NULL DEFAULT 0")
+        if "category" not in info:
+            db.execute("ALTER TABLE products ADD COLUMN category TEXT DEFAULT ''")
+        if "sku" not in info:
+            # unlikely since earlier created schema includes sku, but ensure column exists
+            raise RuntimeError("products table missing 'sku' column after migration attempt")
+        db.commit()
+        
 class UserCreate(BaseModel):
     first_name: str
     last_name: str
