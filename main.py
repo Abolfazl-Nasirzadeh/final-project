@@ -3,7 +3,7 @@ from pydantic import BaseModel, EmailStr, constr, Field
 import bcrypt, secrets, sqlite3
 from typing import Optional, Dict, List, Annotated
 from uuid import uuid4
-import random
+import re
 import string
 
 app = FastAPI(title="Inventory Management Project")
@@ -69,16 +69,6 @@ with get_db() as db:
     """)
     db.commit()
 
-with get_db() as db:
-    info = {row["name"] for row in db.execute("PRAGMA table_info(products)").fetchall()}
-    if "min_threshold" not in info:
-        db.execute("ALTER TABLE products ADD COLUMN min_threshold INTEGER NOT NULL DEFAULT 0")
-    if "category" not in info:
-        db.execute("ALTER TABLE products ADD COLUMN category TEXT DEFAULT ''")
-    if "sku" not in info:
-        raise RuntimeError("products table missing 'sku' column after migration attempt")
-    db.commit()
-
 class UserCreate(BaseModel):
     first_name: str
     last_name: str
@@ -129,11 +119,9 @@ class SupplierOut(SupplierBase):
 
 class ProductBase(BaseModel):
     name: str
-    sku: Optional[str] = None
+    sku: str
     price: float
     quantity: Optional[int] = 0
-    min_threshold: int = Field(..., ge=0)
-    category: Optional[str] = ""
 
 class ProductCreate(ProductBase):
     pass
@@ -143,18 +131,9 @@ class ProductUpdate(BaseModel):
     sku: Optional[str]
     price: Optional[float]
     quantity: Optional[int]
-    min_threshold: Optional[int]
-    category: Optional[str]
 
-class ProductOut(BaseModel):
+class ProductOut(ProductBase):
     id: int
-    name: str
-    sku: str
-    price: float
-    quantity: int
-    min_threshold: int
-    category: Optional[str]
-    low_stock: bool
 
 class OrderItemIn(BaseModel):
     product_id: int
@@ -199,23 +178,6 @@ def get_current_user(authorization: Optional[str] = Header(default=None)):
         if not row:
             raise HTTPException(status_code=401, detail="user not found")
         return dict(row)
-
-def require_admin(current=Depends(get_current_user)):
-    if current.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="admin privileges required")
-    return current
-
-def generate_sku(name: str, tries: int = 6) -> str:
-    base = "".join(ch for ch in name.upper() if ch.isalnum())[:6]
-    if not base:
-        base = "ITEM"
-        with get_db() as db:
-            for _ in range(tries):
-                suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
-                sku = f"{base[:6]}-{suffix}"
-                if not db.execute("SELECT 1 FROM products WHERE sku = ?", (sku,)).fetchone():
-                    return   sku
-    raise HTTPEXception(status_code=500, detail="unable to generate unique SKU, try again")
 
 @app.post("/signup", response_model=SignupResponse, status_code=status.HTTP_201_CREATED)
 def signup(payload: UserCreate):
@@ -328,134 +290,39 @@ def deactivate_supplier(supplier_id: int):
 
 
 @app.post("/products", response_model=ProductOut, status_code=201)
-def create_product(payload: ProductCreate, current=Depends(get_current_user)):
+def create_product(payload: ProductCreate):
     with get_db() as db:
-        sku = payload.sku.strip() if payload.sku else None
-        if not sku:
-            sku = generate_sku(payload.name)
-        else:
-            if db.execute("SELECT 1 FROM products WHERE sku = ?", (sku,)).fetchone():
-                raise HTTPException(status_code=400, detail="product with this SKU exists")
+        if db.execute("SELECT 1 FROM products WHERE sku = ?", (payload.sku,)).fetchone():
+            raise HTTPException(status_code=400, detail="product with this SKU exists")
         cur = db.execute("""
-            INSERT INTO products (name, sku, price, quantity, min_threshold, category)
+            INSERT INTO products (name, sku, price, quantity)
             VALUES (?, ?, ?, ?)
-        """, (payload.name, sku, payload.price, payload.quantity or 0, payload.min_threshold, payload.category or ""))
+        """, (payload.name, payload.sku, payload.price, payload.quantity))
         db.commit()
         product_id = cur.lastrowid
-        low_stock = (payload.quantity or 0) < payload.min_threshold
-        return ProductOut(
-            id=product_id,
-            name=payload.name,
-            sku=sku,
-            price=payload.price,
-            quantity=payload.quantity or 0,
-            min_threshold=payload.min_threshold,
-            category=payload.category or "",
-            low_stock=low_stock
-        )
+        return {**payload.dict(), "id": product_id}
 
 @app.get("/products", response_model=List[ProductOut])
-def get_products(
-    q: Optional[str] = Query(None, description="search name or sku"),
-    category: Optional[str] = Query(None),
-    min_price: Optional[float] = Query(None),
-    max_price: Optional[float] = Query(None),
-    below_threshold: Optional[bool] = Query(False, description="only products below min_threshold"),
-    sort_by: Optional[str] = Query("name", pattern="^(name|price)&"),
-    order: Optional[str] = Query("asc", pattern="^(asc|desc)&"),
-    limit: int = Query(10, ge=1, le=500),
-    page: int = Query(1, ge=1)
-):
-    offset = (page - 1) * limit
-    where_clauses = []
-    params = []
-
-    if q:
-        where_clauses.append("(name LIKE ? OR sku LIKE ?)")
-        q_like = f"%{q}%"
-        params.extend([q_like, q_like])
-    if category:
-        where_clauses.append("category = ?")
-        params.append(category)
-    if min_price is not None:
-        where_clauses.append("price >= ?")
-        params.append(min_price)
-    if max_price is not None:
-        where_clauses.append("price <= ?")
-        params.append(max_price)
-    if below_threshold:
-        where_clauses.append("quantity < min_threshold")
-
-    where_sql = ("WHERE " + " AND".join(where_clauses)) if where_clauses else ""
-
-    order_sql = f"ORDER BY {sort_by} {order.upper()}"
-    sql = f"SELECT * FROM products {where_sql} {order_sql} LIMIT ? OFFSET ?"
-    params.extend([limit, offset])
-
+def get_products():
     with get_db() as db:
-        rows = db.execute(sql, tuple(params)).fetchall()
-        result = []
-        for r in rows:
-            low_stock = r["quantity"] < r["min_threshold"]
-            result.append(ProductOut(
-                id=r["id"],
-                name=r["name"],
-                sku=r["sku"],
-                price=r["price"],
-                quantity=r["quantity"],
-                min_threshold=r["min_threshold"],
-                category=r["category"],
-                low_stock=low_stock
-            ))
-        return result
-
-@app.get("/products/{product_id}", response_model=ProductOut)
-def get_product(product_id: int):
-    with get_db() as db:
-        r = db.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
-        if not r:
-            raise HTTPException(status_code=404, detail="product not found")
-        low_stock = r["quantity"] < r["min_threshold"]
-        return ProductOut(
-            id=r["id"],
-            name=r["name"],
-            sku=r["sku"],
-            price=r["price"],
-            quantity=r["quantity"],
-            min_threshold=r["min_threshold"],
-            category=r["category"],
-            low_stock=low_stock
-        )
+        rows = db.execute("SELECT * FROM products").fetchall()
+        return [dict(row) for row in rows]
 
 @app.put("/products/{product_id}", response_model=ProductOut)
-def update_product(product_id: int, payload: ProductUpdate, current=Depends(get_current_user)):
+def update_product(product_id: int, payload: ProductUpdate):
     with get_db() as db:
         row = db.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="product not found")
         update_data = payload.dict(exclude_unset=True)
-        if "sku" in update_data and update_data["sku"]:
-            exists = db.execute("SELECT 1 FROM products WHERE sku = ? AND id != ?", (update_data["sku"], product_id)).fetchone()
-            if exists:
-                raise HTTPException(status_code=400, detail="another product with this SKU exists")
-        if update_data:
-            set_clause = ", ".join([f"{k} = ?" for k in update_data.keys()])
-            db.execute(f"UPDATE products SET {set_clause} WHERE id = ?", (*update_data.values(), product_id))
-            db.commit()
+        set_clause = ", ".join([f"{k} = ?" for k in update_data.keys()])
+        db.execute(f"UPDATE products SET {set_clause} WHERE id = ?", (*update_data.values(), product_id))
+        db.commit()
         updated = db.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
-        return ProductOut(
-            id=updated["id"],
-            name=updated["name"],
-            sku=updated["sku"],
-            price=updated["price"],
-            quantity=updated["quantity"],
-            min_threshold=updated["min_threshold"],
-            category=updated["category"],
-            low_stock=low_stock
-        )
+        return dict(updated)
 
 @app.delete("/products/{product_id}")
-def delete_product(product_id: int, current=Depends(require_admin)):
+def delete_product(product_id: int):
     with get_db() as db:
         row = db.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
         if not row:
@@ -464,21 +331,6 @@ def delete_product(product_id: int, current=Depends(require_admin)):
         db.commit()
         return {"detail": f"Product {product_id} deleted"}
     
-@app.post("/products/{product_id}/add-stock")
-def add_stock(product_id: int, amount: int = Body(..., embed=True, ge=1), current=Depends(require_admin)):
-    """
-    Admin endpoint to add stock for a product.
-    Request body example: {"amount": 10}
-    """
-    with get_db() as db:
-        row = db.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="product not found")
-        new_qty = row["quantity"] + amount
-        db.execute("UPDATE products SET quantity = ? WHERE id = ?", (new_qty, product_id))
-        db.commit()
-        low_stock = new_qty < row["min_threshold"]
-        return {"detail": f"Added {amount} units", "product_id": product_id, "new_quantity": new_qty, "low_stock": low_stock}
 
 @app.post("/purchase-orders", response_model=PurchaseOrderOut, status_code=201)
 def create_order(payload: PurchaseOrderCreate):
@@ -501,8 +353,7 @@ def create_order(payload: PurchaseOrderCreate):
                                   (order_id, item.product_id, item.quantity))
             items_out.append({"id": cur_item.lastrowid, "product_id": item.product_id, "quantity": item.quantity})
         db.commit()
-        created_at = db.execute("SELECT created_at FROM purchase_orders WHERE id = ?", (order_id,)).fetchone()["created_at"]
-        return {"id": order_id, "supplier_id": payload.supplier_id, "status": "draft", "created_at": created_at, "items": items_out}
+        return {"id": order_id, "supplier_id": payload.supplier_id, "status": "draft", "created_at": "NOW", "items": items_out}
 
 @app.put("/purchase-orders/{order_id}/status")
 def update_order_status(order_id: int, payload: OrderStatusUpdate):
